@@ -457,6 +457,8 @@ class Session(object):
         sessionMap[id(self)] = self
 
     def awaitTraps(self, peername, fileno = -1, pre_parse_callback=None, debug=False):
+        if _netsnmp_int_version >= (5,3):
+            lib.netsnmp_ds_set_string(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_APPTYPE, 'pynetsnmptrapd')
         lib.init_usm()
         if debug:
             lib.debug_register_tokens("snmp_parse") # or "ALL" for everything
