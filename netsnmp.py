@@ -66,21 +66,20 @@ netsnmp_callback = CFUNCTYPE(c_int,
 arg_parse_proc = CFUNCTYPE(c_int, POINTER(c_char_p), c_int);
 
 version = lib.netsnmp_get_version()
-float_version = float('.'.join(version.split('.')[:2]))
-_netsnmp_str_version = tuple(str(v) for v in version.split('.'))
+_netsnmp_int_version = tuple(int(v) for v in version.split('.'))
 localname = []
 paramName = []
 transportConfig = []
-if float_version < 5.099:
+if _netsnmp_int_version < (5,1):
     raise ImportError("netsnmp version 5.1 or greater is required")
-if float_version > 5.199:
+if _netsnmp_int_version >= (5,2):
     localname = [('localname', c_char_p)]
-    if float_version > 5.299:
+    if _netsnmp_int_version >= (5,3):
         paramName = [('paramName', c_char_p)]
-if _netsnmp_str_version >= ('5','6'):
+if _netsnmp_int_version >= (5,6):
     # Versions >= 5.6 and < 5.6.1.1 broke binary compatibility and changed oid type from c_long to c_uint32. This works
     # around the issue for these platforms to allow things to work properly.
-    if _netsnmp_str_version <= ('5','6','1','1'):
+    if _netsnmp_int_version <= (5,6,1,1):
         oid = c_uint32
 
     # Versions >= 5.6 broke binary compatibility by adding transport specific configuration
