@@ -1,5 +1,7 @@
-import struct
 import logging
+import struct
+import sys
+
 from ipaddr import IPAddress
 from twisted.internet import reactor
 from twisted.internet.error import TimeoutError
@@ -8,8 +10,6 @@ from twisted.internet import defer
 
 from . import netsnmp
 from .CONSTANTS import *
-
-log = logging.getLogger('zen.twistedsnmp')
 
 
 class Timer(object):
@@ -71,6 +71,7 @@ def updateReactor():
     """Add/remove event handlers for SNMP file descriptors and timers"""
 
     fds, t = netsnmp.snmp_select_info()
+    log = netsnmp._getLogger("updateReactor")
     if log.getEffectiveLevel() < logging.DEBUG:
         log.debug('reactor settings: %r, %r', fds, t)
     for fd in fds:
@@ -194,7 +195,7 @@ class AgentProxy(object):
         self.cmdLineArgs = cmdLineArgs
         self.defers = {}
         self.session = None
-        self.abandoned = False
+        self._log = netsnmp._getLogger("agentproxy")
 
     def _signSafePop(self, d, intkey):
         """
@@ -209,7 +210,7 @@ class AgentProxy(object):
             return d.pop(intkey)
         except KeyError as ex:
             if intkey < 0:
-                log.debug("Negative ID for _signSafePop: %d" % intkey)
+                self._log.debug("Negative ID for _signSafePop: %s", intkey)
                 #convert to unsigned, try that key
                 uintkey = struct.unpack("I", struct.pack("i", intkey))[0]
                 try:
@@ -223,7 +224,7 @@ class AgentProxy(object):
     def callback(self, pdu):
         """netsnmp session callback"""
         result = []
-        response = netsnmp.getResult(pdu)
+        response = netsnmp.getResult(pdu, self._log)
 
         try:
             d, oids_requested = self._signSafePop(self.defers, pdu.reqid)
@@ -238,12 +239,12 @@ class AgentProxy(object):
                     # Some devices use usmStatsNotInTimeWindows as a normal part of the SNMPv3 handshake (JIRA-1565)
                     # net-snmp automatically retries the request with the previous request_id and the values for
                     # msgAuthoritativeEngineBoots and msgAuthoritativeEngineTime from this error packet
-                    log.debug("Received a usmStatsNotInTimeWindows error. Some devices use usmStatsNotInTimeWindows as a normal part of the SNMPv3 handshake.")
+                    self._log.debug("Received a usmStatsNotInTimeWindows error. Some devices use usmStatsNotInTimeWindows as a normal part of the SNMPv3 handshake.")
                     return
                     
                 if usmStatsOidStr == ".1.3.6.1.2.1.1.1.0":
                     # Some devices (Cisco Nexus/MDS) use sysDescr as a normal part of the SNMPv3 handshake (JIRA-7943)
-                    log.debug("Received sysDescr during handshake. Some devices use sysDescr as a normal part of the SNMPv3 handshake.")
+                    self._log.debug("Received sysDescr during handshake. Some devices use sysDescr as a normal part of the SNMPv3 handshake.")
                     return
 
                 default_msg = "packet dropped (OID: {0})".format(usmStatsOidStr)
@@ -253,7 +254,6 @@ class AgentProxy(object):
                 message = "packet dropped"
 
             for d in (d for d, rOids in self.defers.itervalues() if not d.called):
-                self.abandon()
                 reactor.callLater(0, d.errback, failure.Failure(Snmpv3Error(message)))
 
             return
@@ -265,7 +265,6 @@ class AgentProxy(object):
         if len(result)==1 and result[0][0] not in oids_requested:
             usmStatsOidStr = asOidStr(result[0][0])
             if usmStatsOidStr in USM_STATS_OIDS:
-                self.abandon()
                 msg = USM_STATS_OIDS.get(usmStatsOidStr)
                 reactor.callLater(0, d.errback, failure.Failure(Snmpv3Error(msg)))
                 return
@@ -284,7 +283,7 @@ class AgentProxy(object):
                 return
             else:
                 result = []
-                log.warning(message + '. OIDS: {0}'.format(oids_requested))
+                self._log.warning(message + '. OIDS: %s', oids_requested)
 
         reactor.callLater(0, d.callback, result)
 
@@ -293,12 +292,12 @@ class AgentProxy(object):
         reactor.callLater(0, d.errback, failure.Failure(TimeoutError()))
 
     def _getCmdLineArgs(self):
+        if not self.cmdLineArgs:
+            return ()
+
         version = str(self.snmpVersion).lstrip('v')
         if version == '2':
             version += 'c'
-        if self.session is not None:
-            self.session.close()
-            self.session = None
 
         if '%' in self.ip:
             address, interface = self.ip.split('%')
@@ -306,7 +305,8 @@ class AgentProxy(object):
             address = self.ip
             interface = None
 
-        log.debug("AgentProxy._getCmdLineArgs: using google ipaddr on %s" % address)
+        self._log.debug("AgentProxy._getCmdLineArgs: using google ipaddr on %s", address)
+
         ipobj = IPAddress(address)
         agent = _get_agent_spec(ipobj, interface, self.port)
 
@@ -319,35 +319,30 @@ class AgentProxy(object):
         return cmdLineArgs
 
     def open(self):
-        self.session = netsnmp.Session(cmdLineArgs=self._getCmdLineArgs())
+        if self.session is not None:
+            self.session.close()
+            self.session = None
+
+        self.session = netsnmp.Session(
+            version=netsnmp.SNMP_VERSION_MAP.get(
+                self.snmpVersion, 
+                netsnmp.SNMP_VERSION_2c),
+            timeout=int(self.timeout),
+            retries=int(self.tries),
+            peername= '%s:%d' % (self.ip, self.port),
+            community=self.community,
+            community_len=len(self.community),
+            cmdLineArgs=self._getCmdLineArgs())
+
         self.session.callback = self.callback
         self.session.timeout = self.timeout_
         self.session.open()
         updateReactor()
 
-    def abandon(self):
-        """
-        netsnmp appears to deallocate sessions upon receipt of an SNMPv3
-        authentication error. When that occurs, we can't trust any pointers we
-        may have to those objects, and should slash and burn our references.
-
-        See ZEN-23056.
-        """
-        if not self.abandoned:
-            self.session.abandon()
-            self.abandoned = True
-
     def close(self):
-        # Changing this to something sane causes zenperfsnmp to blow up
-        # Trac http://dev.zenoss.org/trac/ticket/6354
-        assert self.session
-
-        # ZEN-23056: We can't count on this reference to still be a session, so
-        # we can't close it
-        if not self.abandoned:
+        if self.session is not None:
             self.session.close()
-
-        self.session = None
+            self.session = None
         updateReactor()
 
     def _get(self, oids, timeout=None, retryCount=None):

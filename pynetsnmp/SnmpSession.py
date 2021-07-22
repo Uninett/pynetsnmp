@@ -26,7 +26,7 @@ class SnmpSession(object):
 
         self.session = netsnmp.Session(
             version=self._version,
-            timeout=int(self.timeout*1e6),
+            timeout=self.timeout,
             retries=int(self.retries-1),
             peername='%s:%d' % (self.ip, self.port),
             community=self.community,
