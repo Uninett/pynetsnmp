@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import logging
@@ -10,7 +11,11 @@ from .CONSTANTS import *
 if sys.version_info > (3,):
     long = int
 
-# freebsd cannot manage a decent find_library
+
+def _getLogger(name):
+    return logging.getLogger("zen.pynetsnmp.%s" % name)
+
+
 if sys.platform.find('free') > -1:
     find_library_orig = find_library
 
@@ -35,8 +40,6 @@ def find_library(name):
         if os.path.exists(pathName):
             return pathName
     return find_library_orig(name)
-
-log = logging.getLogger('zen.netsnmp')
 
 c_int_p = c_void_p
 authenticator = CFUNCTYPE(c_char_p, c_int_p, c_char_p, c_int)
@@ -85,6 +88,8 @@ _netsnmp_str_version = tuple(str(v) for v in version.split('.'))
 localname = []
 paramName = []
 transportConfig = []
+trapStats = []
+msgMaxSize = []
 if float_version < 5.099:
     raise ImportError("netsnmp version 5.1 or greater is required")
 if float_version > 5.199:
@@ -102,6 +107,26 @@ if _netsnmp_str_version >= ('5','6'):
     class netsnmp_container_s(Structure):
         pass
     transportConfig = [('transport_configuration', POINTER(netsnmp_container_s))]
+if _netsnmp_str_version >= ('5','8'):
+    # Version >= 5.8 broke binary compatibility, adding the trap_stats member to the netsnmp_session struct
+    msgMaxSize = [('trap_stats', c_void_p)]
+    # Version >= 5.8 broke binary compatibility, adding the msgMaxSize member to the snmp_pdu struct
+    msgMaxSize = [('msgMaxSize', c_long)]
+    # Version >= 5.8 broke binary compatibility, doubling the size of these constants used for struct sizes
+    USM_AUTH_KU_LEN = 64
+    USM_PRIV_KU_LEN = 64
+
+
+SNMP_VERSION_MAP = {
+    'v1': SNMP_VERSION_1,
+    'v2c': SNMP_VERSION_2c,
+    'v2u': SNMP_VERSION_2u,
+    'v3': SNMP_VERSION_3,
+    'sec': SNMP_VERSION_sec,
+    '2p': SNMP_VERSION_2p,
+    '2star': SNMP_VERSION_2star,
+}
+
 
 # Version
 netsnmp_session._fields_ = [
@@ -155,6 +180,7 @@ netsnmp_session._fields_ = [
         ('securityLevel', c_int),
 
         ] + paramName + [
+        ] + trapStats + [
 
         ('securityInfo', c_void_p),
 
@@ -217,6 +243,9 @@ netsnmp_pdu._fields_ = [
         ('securityModel', c_int),
         ('securityLevel', c_int),
         ('msgParseModel', c_int),
+
+        ] + msgMaxSize + [
+
         ('transport_data', c_void_p),
         ('transport_data_length', c_int),
         ('tDomain', POINTER(oid)),
@@ -255,21 +284,19 @@ netsnmp_log_message._fields_ = [
     ('msg', c_char_p),
 ]
 PRIORITY_MAP = {
-    LOG_EMERG: logging.CRITICAL + 2,
-    LOG_ALERT: logging.CRITICAL + 1,
+    LOG_EMERG: logging.CRITICAL,
+    LOG_ALERT: logging.CRITICAL,
     LOG_CRIT: logging.CRITICAL,
     LOG_ERR: logging.ERROR,
     LOG_WARNING: logging.WARNING,
-    LOG_NOTICE: logging.INFO + 1,
+    LOG_NOTICE: logging.INFO,
     LOG_INFO: logging.INFO,
     LOG_DEBUG: logging.DEBUG,
-    }
-
-
+}
 def netsnmp_logger(a, b, msg):
     msg = cast(msg, netsnmp_log_message_p)
     priority = PRIORITY_MAP.get(msg.contents.priority, logging.DEBUG)
-    log.log(priority, str(msg.contents.msg).strip())
+    _getLogger("netsnmp").log(priority, str(msg.contents.msg).strip())
     return 0
 netsnmp_logger = log_callback(netsnmp_logger)
 lib.snmp_register_callback(SNMP_CALLBACK_LIBRARY,
@@ -317,6 +344,28 @@ snmp_input_t = CFUNCTYPE(c_int,
                          c_int,
                          netsnmp_pdu_p,
                          c_void_p)
+
+
+# A pointer to a _CallbackData struct is used for the callback_magic
+# parameter on the netsnmp_session structure.  In the case of a SNMP v3
+# authentication error, a portion of the data pointed by callback_magic
+# is overwritten.  The 'reserved' member of the _CallbackData struct
+# allocates enough space for the net-snmp library to write into without
+# corrupting the rest of the struct.
+class _CallbackData(Structure):
+    _fields_ = [
+        ("reserved", c_void_p),  # net-snmp corrupts this on snmpv3 auth errors
+        ("session_id", c_ulong),
+    ]
+
+
+_CallbackDataPtr = POINTER(_CallbackData)
+
+lib.snmpv3_get_report_type.argtypes = [netsnmp_pdu_p]
+lib.snmpv3_get_report_type.restype = c_int
+
+lib.snmp_api_errstring.argtypes = [c_int]
+lib.snmp_api_errstring.restype = c_char_p
 
 
 class UnknownType(Exception):
@@ -371,8 +420,7 @@ decoder = {
     int2byte(ASN_APP_DOUBLE): lambda pdu: pdu.val.double.contents.value,
     }
 
-
-def decodeType(var):
+def decodeType(var, log):
     oid = [var.name[i] for i in range(var.name_length)]
     decode = decoder.get(var.type, None)
     if not decode:
@@ -384,12 +432,12 @@ def decodeType(var):
     return oid, decode(var)
 
 
-def getResult(pdu):
+def getResult(pdu, log):
     result = []
     var = pdu.variables
     while var:
         var = var.contents
-        oid, val = decodeType(var)
+        oid, val = decodeType(var, log)
         result.append( (tuple(oid), val) )
         var = var.next_variable
     return result
@@ -409,16 +457,17 @@ sessionMap = {}
 
 
 def _callback(operation, sp, reqid, pdu, magic):
-    sess = sessionMap[magic]
+    data_ptr = cast(magic, _CallbackDataPtr)
+    sess = sessionMap[data_ptr.contents.session_id]
     try:
         if operation == NETSNMP_CALLBACK_OP_RECEIVED_MESSAGE:
             sess.callback(pdu.contents)
         elif operation == NETSNMP_CALLBACK_OP_TIMED_OUT:
             sess.timeout(reqid)
         else:
-            log.error("Unknown operation: %d", operation)
+            _getLogger("callback").error("Unknown operation: %d", operation)
     except Exception as ex:
-        log.exception("Exception in _callback %s", ex)
+        _getLogger("callback").exception("Exception in _callback %s", ex)
     return 1
 _callback = netsnmp_callback(_callback)
 
@@ -437,7 +486,7 @@ _doNothingProc = arg_parse_proc(_doNothingProc)
 
 
 def parse_args(args, session):
-    args = [sys.argv[0]] + args
+    args = [sys.argv[0],] + args
     argc = len(args)
     argv = (c_char_p * argc)()
     for i in range(argc):
@@ -446,13 +495,13 @@ def parse_args(args, session):
         if isinstance(arg, text_type):
             arg = arg.encode('utf-8')
         argv[i] = create_string_buffer(arg).raw
+    # WARNING: Usage of snmp_parse_args call causes memory leak.
     if lib.snmp_parse_args(argc, argv, session, '', _doNothingProc) < 0:
-        def toList(args):
-            return [str(x) for x in args]
-        raise ArgumentParseError("Unable to parse arguments", toList(argv))
+        raise ArgumentParseError("Unable to parse arguments", ' '.join(argv))
     # keep a reference to the args for as long as sess is alive
     return argv
 
+_NoAttribute = object()
 
 def initialize_session(sess, cmdLineArgs, kw):
     args = None
@@ -474,7 +523,28 @@ def initialize_session(sess, cmdLineArgs, kw):
     for attr, value in kw.items():
         if isinstance(value, text_type):
             value = value.encode('utf-8')
-        setattr(sess, attr, value)
+        pv = getattr(sess, attr, _NoAttribute)
+        if pv is _NoAttribute:
+            continue  # Don't set invalid properties
+        if attr == "timeout":
+            # -1 means the property hasn't been set
+            if pv == -1:
+                # Converts seconds to microseconds
+                setattr(sess, attr, value * 1000000)
+        elif attr == "version":
+            # -1 means the property hasn't been set
+            if pv == -1:
+                setattr(sess, attr, value)
+        elif attr == "community":
+            # None means the property hasn't been set
+            if pv is None:
+                setattr(sess, attr, value)
+                setattr(sess, "community_len", len(value))
+        elif attr == "community_len":
+            # Setting community_len on its own is a segfault waiting to happen
+            pass
+        else:
+            setattr(sess, attr, value)
     return args
 
 
@@ -487,17 +557,21 @@ class Session(object):
         self.kw = kw
         self.sess = None
         self.args = None
+        self._data = None  # ref to _CallbackData object
+        self._log = _getLogger("session")
 
     def open(self):
         sess = netsnmp_session()
         self.args = initialize_session(sess, self.cmdLineArgs, self.kw)
         sess.callback = _callback
-        sess.callback_magic = id(self)
+        self._data = _CallbackData(session_id=id(self))
+        sess.callback_magic = cast(pointer(self._data), c_void_p)
+        sessionMap[id(self)] = self
+        self._log.debug("Client session created session_id=%s", id(self))
         ref = byref(sess)
         self.sess = lib.snmp_open(ref)
         if not self.sess:
             raise SnmpError('snmp_open')
-        sessionMap[id(self)] = self
 
     def awaitTraps(self, peername, fileno=-1, pre_parse_callback=None, debug=False):
         if float_version > 5.299:
@@ -513,7 +587,7 @@ class Session(object):
         elif getattr(lib, "netsnmp_udp6_ctor", marker) is not marker:
             lib.netsnmp_udp6_ctor()
         else:
-            log.debug("Cannot find constructor function for UDP/IPv6 transport domain object.")
+            self._log.debug("Cannot find constructor function for UDP/IPv6 transport domain object.")
         lib.init_snmp("pynetsnmp")
         lib.setup_engineID(None, None)
         transport = lib.netsnmp_tdomain_transport(peername.encode(), 1, b"udp")
@@ -531,16 +605,20 @@ class Session(object):
         sess.retries = SNMP_DEFAULT_RETRIES
         sess.timeout = SNMP_DEFAULT_TIMEOUT
         sess.callback = _callback
-        sess.callback_magic = id(self)
+
+        self._data = _CallbackData(session_id=id(self))
+        sess.callback_magic = cast(pointer(self._data), c_void_p)
+        sessionMap[id(self)] = self
+        self._log.debug("Server session created session_id=%s", id(self))
+
         # sess.authenticator = None
         sess.isAuthoritative = SNMP_SESS_UNKNOWNAUTH
         rc = lib.snmp_add(self.sess, transport, pre_parse_callback, None)
         if not rc:
             raise SnmpError('snmp_add')
-        sessionMap[id(self)] = self
 
     def create_users(self, users):
-        log.debug("create_users: Creating %s users." % len(users))
+        self._log.debug("create_users: Creating %s users.", len(users))
         for user in users:
             if user.version == 3:
                 try:
@@ -553,11 +631,9 @@ class Session(object):
                                       user.privacy_protocol,  # DES or AES
                                       user.privacy_passphrase])
                     lib.usm_parse_create_usmUser("createUser", line)
-                    log.debug("create_users: created user: %s" % user)
-                except Exception as e:
-                    log.debug("create_users: could not create user: %s: (%s: %s)" %
-                              (user, e.__class__.__name__, e)
-                              )
+                    self._log.debug("create_users: created user: %s", user)
+                except StandardError as e:
+                    self._log.debug("create_users: could not create user: %s: (%s: %s)", user, e.__class__.__name__, e)
 
     def sendTrap(self, trapoid, varbinds=None):
         if '-v1' in self.cmdLineArgs:
@@ -592,28 +668,19 @@ class Session(object):
 
         lib.snmp_send(self.sess, pdu)
 
-    def abandon(self):
-        """
-        netsnmp appears to deallocate sessions upon receipt of an SNMPv3
-        authentication error. When that occurs, we can't trust any pointers we
-        may have to those objects, and should slash and burn our references.
-
-        See ZEN-23056.
-        """
-        log.debug("Abandoning session %s" % id(self))
-        sessionMap.pop(id(self))
-        self.sess = None
-        self.args = None
-
     def close(self):
-        if not self.sess:
-            return
+        if self.sess is not None:
+            lib.snmp_close(self.sess)
+            self.sess = None
+            self.args = None
+            self._data = None
         if id(self) not in sessionMap:
-            log.warn("Unable to find session id %r in sessionMap", self.kw)
+            self._log.warn(
+                "Session ID not found session_id=%s %r", id(self), self.kw,
+            )
             return
-        lib.snmp_close(self.sess)
         del sessionMap[id(self)]
-        self.args = None
+        self._log.debug("Session closed session_id=%s", id(self))
 
     def callback(self, pdu):
         pass
@@ -631,7 +698,7 @@ class Session(object):
             lib.snmp_add_null_var(req, oid, len(oid))
         response = netsnmp_pdu_p()
         if lib.snmp_synch_response(self.sess, req, byref(response)) == 0:
-            result = dict(getResult(response.contents))
+            result = dict(getResult(response.contents, self._log))
             lib.snmp_free_pdu(response)
             return result
 
@@ -640,14 +707,14 @@ class Session(object):
             cliberr = c_int()
             snmperr = c_int()
             errstring = c_char_p()
-            lib.snmp_error(self.sess, byref(cliberr), byref(snmperr), byref(errstring))
-            fmt = "Session.%s: snmp_send cliberr=%s, snmperr=%s, errstring=%s"
-            msg = fmt % (send_type, cliberr.value, snmperr.value, errstring.value)
-            log.debug(msg)
+            lib.snmp_error(self.sess, byref(cliberr), byref(snmperr), byref(errstring));
+            msg_fmt = "%s: snmp_send cliberr=%s, snmperr=%s, errstring=%s"
+            msg_args = (send_type, cliberr.value, snmperr.value, errstring.value)
+            self._log.debug(msg_fmt, *msg_args)
             lib.snmp_free_pdu(req)
             if snmperr.value == SNMPERR_TIMEOUT:
                 raise SnmpTimeoutError()
-            raise SnmpError(msg)
+            raise SnmpError(msg_fmt % msg_args)
 
     def get(self, oids):
         req = self._create_request(SNMP_MSG_GET)
@@ -697,7 +764,7 @@ class Session(object):
         oid = mkoid(root)
         lib.snmp_add_null_var(req, oid, len(oid))
         send_status = lib.snmp_send(self.sess, req)
-        log.debug("Session.walk: send_status=%s" % send_status)
+        self._log.debug("walk: send_status=%s", send_status)
         self._handle_send_status(req, send_status, 'walk')
         return req.contents.reqid
 
