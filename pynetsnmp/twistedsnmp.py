@@ -313,13 +313,14 @@ class AgentProxy(object):
             self.session.close()
             self.session = None
 
+        peername = _get_agent_spec(IPAddress(self.ip), None, self.port)
         self.session = netsnmp.Session(
             version=netsnmp.SNMP_VERSION_MAP.get(
                 self.snmpVersion, 
                 netsnmp.SNMP_VERSION_2c),
             timeout=int(self.timeout),
             retries=int(self.tries),
-            peername= '%s:%d' % (self.ip, self.port),
+            peername=peername,
             community=self.community,
             community_len=len(self.community),
             cmdLineArgs=self._getCmdLineArgs())
