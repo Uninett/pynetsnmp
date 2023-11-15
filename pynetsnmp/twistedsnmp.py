@@ -1,6 +1,5 @@
 import logging
 import struct
-import sys
 
 from ipaddr import IPAddress
 from twisted.internet import reactor
