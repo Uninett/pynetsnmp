@@ -22,7 +22,7 @@ class TableRetriever(object):
                  limit=1000):
         self.proxy = proxy
         self.tableStatus = [_TableStatus(oid) for oid in oids]
-        self.defer = defer.Deferred()
+        self.defer = None
         if proxy.snmpVersion.find('1') > -1:
             self.how = proxy._walk
         else:
@@ -34,6 +34,7 @@ class TableRetriever(object):
         self.hit_limit = False
 
     def __call__(self):
+        self.defer = defer.Deferred()
         self.fetchSomeMore()
         return self.defer
 
@@ -52,7 +53,6 @@ class TableRetriever(object):
         for ts in self.tableStatus:
             results[ts.startOidStr]=dict([(asOidStr(oid), value) for oid, value in ts.result])
         self.defer.callback(results)
-        self.defer = None
 
     def saveResults(self, values, ts):
         if values:
@@ -75,4 +75,4 @@ class TableRetriever(object):
 
     def error(self, why):
         self.defer.errback(why)
-        self.defer = None
+
