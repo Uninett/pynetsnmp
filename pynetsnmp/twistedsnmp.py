@@ -1,6 +1,7 @@
 import logging
 import struct
-import sys
+
+from six import itervalues
 
 from ipaddr import IPAddress
 from twisted.internet import reactor
@@ -253,7 +254,7 @@ class AgentProxy(object):
             else:
                 message = "packet dropped"
 
-            for d in (d for d, rOids in self.defers.itervalues() if not d.called):
+            for d in (d for d, rOids in itervalues(self.defers) if not d.called):
                 reactor.callLater(0, d.errback, failure.Failure(Snmpv3Error(message)))
 
             return
