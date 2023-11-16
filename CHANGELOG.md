@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This changelog only lists changes that have been made since this forked version
 of pynetsnmp came under the care of Uninett, and later Sikt.
 
-## [Unreleased]
+## [0.1.10] - 2023-11-16
 
 ### Fixed
 
