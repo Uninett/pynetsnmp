@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This changelog only lists changes that have been made since this forked version
 of pynetsnmp came under the care of Uninett, and later Sikt.
 
+## [Unreleased]
+
+### Fixed
+
+- SNMPv3 error handling routines were not Python 3 compatible. ([#3](https://github.com/Uninett/pynetsnmp/issues/3))
+- Broken `TableRetriever` behavior in certain SNMPv3 error situations. ([#4](https://github.com/Uninett/pynetsnmp/issues/4))
+
 ## [0.1.9] - 2022-03-18
 
 ### Fixed
