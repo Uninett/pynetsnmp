@@ -1,9 +1,9 @@
+import ipaddress
 import logging
 import struct
 
 from six import itervalues
 
-from ipaddr import IPAddress
 from twisted.internet import reactor
 from twisted.internet.error import TimeoutError
 from twisted.python import failure
@@ -308,7 +308,7 @@ class AgentProxy(object):
 
         self._log.debug("AgentProxy._getCmdLineArgs: using google ipaddr on %s", address)
 
-        ipobj = IPAddress(address)
+        ipobj = ipaddress.ip_address(address)
         agent = _get_agent_spec(ipobj, interface, self.port)
 
         cmdLineArgs = list(self.cmdLineArgs) + ['-v', str(version),
@@ -324,7 +324,7 @@ class AgentProxy(object):
             self.session.close()
             self.session = None
 
-        peername = _get_agent_spec(IPAddress(self.ip), None, self.port)
+        peername = _get_agent_spec(ipaddress.ip_address(self.ip), None, self.port)
         self.session = netsnmp.Session(
             version=netsnmp.SNMP_VERSION_MAP.get(
                 self.snmpVersion, 
