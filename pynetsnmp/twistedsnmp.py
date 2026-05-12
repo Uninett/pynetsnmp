@@ -1,9 +1,9 @@
 import logging
 import struct
 
-from six import itervalues
+from ipaddress import ip_address
 
-from ipaddr import IPAddress
+from six import itervalues
 from twisted.internet import reactor
 from twisted.internet.error import TimeoutError
 from twisted.python import failure
@@ -109,7 +109,7 @@ def asOid(oidStr):
 
 
 def _get_agent_spec(ipobj, interface, port):
-    """take a google ipaddr object and port number and produce a net-snmp
+    """take an IP address object and port number and produce a net-snmp
     agent specification (see the snmpcmd manpage)"""
     if ipobj.version == 4:
         agent = "udp:%s:%s" % (ipobj.compressed, port)
@@ -306,9 +306,9 @@ class AgentProxy(object):
             address = self.ip
             interface = None
 
-        self._log.debug("AgentProxy._getCmdLineArgs: using google ipaddr on %s", address)
+        self._log.debug("AgentProxy._getCmdLineArgs: address=%s", address)
 
-        ipobj = IPAddress(address)
+        ipobj = ip_address(address)
         agent = _get_agent_spec(ipobj, interface, self.port)
 
         cmdLineArgs = list(self.cmdLineArgs) + ['-v', str(version),
@@ -324,7 +324,7 @@ class AgentProxy(object):
             self.session.close()
             self.session = None
 
-        peername = _get_agent_spec(IPAddress(self.ip), None, self.port)
+        peername = _get_agent_spec(ip_address(self.ip), None, self.port)
         self.session = netsnmp.Session(
             version=netsnmp.SNMP_VERSION_MAP.get(
                 self.snmpVersion, 
