@@ -2,7 +2,6 @@ import logging
 import os
 import sys
 import logging
-from six import text_type, int2byte
 from ctypes import *
 from ctypes.util import find_library
 from . import CONSTANTS
@@ -82,7 +81,7 @@ netsnmp_callback = CFUNCTYPE(c_int,
 # int (*proc)(int, char * const *, int)
 arg_parse_proc = CFUNCTYPE(c_int, POINTER(c_char_p), c_int)
 
-version = text_type(lib.netsnmp_get_version(), 'utf-8')
+version = lib.netsnmp_get_version().decode('utf-8')
 float_version = float('.'.join(version.split('.')[:2]))
 _netsnmp_str_version = tuple(str(v) for v in version.split('.'))
 localname = []
@@ -401,23 +400,23 @@ def decodeString(pdu):
         return string_at(pdu.val.bitstring, pdu.val_len)
     return b''
 
-_valueToConstant = dict([(int2byte(getattr(CONSTANTS, k)), k) for k in CONSTANTS.__dict__.keys() if isinstance(getattr(CONSTANTS,k), int) and getattr(CONSTANTS,k)>=0 and getattr(CONSTANTS,k) < 256])
+_valueToConstant = dict([(bytes((getattr(CONSTANTS, k),)), k) for k in CONSTANTS.__dict__.keys() if isinstance(getattr(CONSTANTS,k), int) and getattr(CONSTANTS,k)>=0 and getattr(CONSTANTS,k) < 256])
 
 
 decoder = {
-    int2byte(ASN_OCTET_STR): decodeString,
-    # int2byte(ASN_BOOLEAN): lambda pdu: pdu.val.integer.contents.value,
-    int2byte(ASN_INTEGER): lambda pdu: pdu.val.integer.contents.value,
-    int2byte(ASN_NULL): lambda pdu: None,
-    int2byte(ASN_OBJECT_ID): decodeOid,
-    int2byte(ASN_BIT_STR): decodeString,
-    int2byte(ASN_IPADDRESS): decodeIp,
-    int2byte(ASN_COUNTER): lambda pdu: pdu.val.uinteger.contents.value,
-    int2byte(ASN_GAUGE): lambda pdu: pdu.val.uinteger.contents.value,
-    int2byte(ASN_TIMETICKS): lambda pdu: pdu.val.uinteger.contents.value,
-    int2byte(ASN_COUNTER64): decodeBigInt,
-    int2byte(ASN_APP_FLOAT): lambda pdu: pdu.val.float.contents.value,
-    int2byte(ASN_APP_DOUBLE): lambda pdu: pdu.val.double.contents.value,
+    bytes((ASN_OCTET_STR,)): decodeString,
+    # bytes((ASN_BOOLEAN,)): lambda pdu: pdu.val.integer.contents.value,
+    bytes((ASN_INTEGER,)): lambda pdu: pdu.val.integer.contents.value,
+    bytes((ASN_NULL,)): lambda pdu: None,
+    bytes((ASN_OBJECT_ID,)): decodeOid,
+    bytes((ASN_BIT_STR,)): decodeString,
+    bytes((ASN_IPADDRESS,)): decodeIp,
+    bytes((ASN_COUNTER,)): lambda pdu: pdu.val.uinteger.contents.value,
+    bytes((ASN_GAUGE,)): lambda pdu: pdu.val.uinteger.contents.value,
+    bytes((ASN_TIMETICKS,)): lambda pdu: pdu.val.uinteger.contents.value,
+    bytes((ASN_COUNTER64,)): decodeBigInt,
+    bytes((ASN_APP_FLOAT,)): lambda pdu: pdu.val.float.contents.value,
+    bytes((ASN_APP_DOUBLE,)): lambda pdu: pdu.val.double.contents.value,
     }
 
 def decodeType(var, log):
@@ -492,7 +491,7 @@ def parse_args(args, session):
     for i in range(argc):
         # snmp_parse_args mutates argv, so create a copy
         arg = args[i]
-        if isinstance(arg, text_type):
+        if isinstance(arg, str):
             arg = arg.encode('utf-8')
         argv[i] = create_string_buffer(arg).raw
     # WARNING: Usage of snmp_parse_args call causes memory leak.
@@ -521,7 +520,7 @@ def initialize_session(sess, cmdLineArgs, kw):
     else:
         lib.snmp_sess_init(byref(sess))
     for attr, value in kw.items():
-        if isinstance(value, text_type):
+        if isinstance(value, str):
             value = value.encode('utf-8')
         pv = getattr(sess, attr, _NoAttribute)
         if pv is _NoAttribute:
