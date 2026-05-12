@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This changelog only lists changes that have been made since this forked version
 of pynetsnmp came under the care of Uninett, and later Sikt.
 
+## [Unreleased]
+
+### Changed
+
+- Packaging modernized from `setup.py`/`setup.cfg` to `pyproject.toml` ([#9](https://github.com/Uninett/pynetsnmp/issues/9))
+
+### Removed
+
+- Dropped dependencies that were only there because of Python 2 compatibility in older versions:
+  - `six` ([#13](https://github.com/Uninett/pynetsnmp/issues/13))
+  - `ipaddr` ([#9](https://github.com/Uninett/pynetsnmp/issues/9))
+- Dropped explicit support for Python < 3.9.
+
 ## [0.1.10] - 2023-11-16
 
 ### Fixed
