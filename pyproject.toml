@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pynetsnmp-2"
-version = "0.1.10"
+version = "0.2.0"
 description = "ctypes wrapper for net-snmp"
 readme = "README.md"
 license = "GPL-2.0-or-later"
