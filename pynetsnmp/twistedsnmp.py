@@ -3,7 +3,6 @@ import struct
 
 from ipaddress import ip_address
 
-from six import itervalues
 from twisted.internet import reactor
 from twisted.internet.error import TimeoutError
 from twisted.python import failure
@@ -254,7 +253,7 @@ class AgentProxy(object):
             else:
                 message = "packet dropped"
 
-            for d in (d for d, rOids in itervalues(self.defers) if not d.called):
+            for d in (d for d, rOids in self.defers.values() if not d.called):
                 reactor.callLater(0, d.errback, failure.Failure(Snmpv3Error(message)))
 
             return

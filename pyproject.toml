@@ -31,7 +31,6 @@ classifiers = [
 ]
 dependencies = [
     "Twisted",
-    "six",
 ]
 
 [project.urls]
